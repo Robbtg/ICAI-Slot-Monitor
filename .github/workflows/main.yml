@@ -1,11 +1,13 @@
-name: ICAI Slot Monitor
+import subprocess
+import json
+import base64
+
+content = """name: ICAI Slot Monitor
 
 on:
   workflow_dispatch:
-
   schedule:
     - cron: "*/5 * * * *"
-      
 
 permissions:
   contents: write
@@ -41,9 +43,9 @@ jobs:
           ICAI_TELEGRAM_BOT_TOKEN: ${{ secrets.ICAI_TELEGRAM_BOT_TOKEN }}
           ICAI_TELEGRAM_CHAT_ID: ${{ secrets.ICAI_TELEGRAM_CHAT_ID }}
         run: |
-          python -m icai_slot_monitor.cli \
-            --config config/config.yaml \
-            --state state/state.json \
+          python -m icai_slot_monitor.cli \\
+            --config config/config.yaml \\
+            --state state/state.json \\
             --once
 
       - name: Commit changed state
@@ -59,3 +61,35 @@ jobs:
           git add state/state.json
           git commit -m "chore: update slot monitor state"
           git push
+"""
+
+gh_path = r"C:\Program Files\GitHub CLI\gh.exe"
+
+info_proc = subprocess.run(
+    [gh_path, "api", "repos/Robbtg/ICAI-Slot-Monitor/contents/.github/workflows/main.yml"],
+    capture_output=True,
+    text=True,
+    check=True,
+)
+data = json.loads(info_proc.stdout)
+sha = data["sha"]
+
+b64_content = base64.b64encode(content.encode("utf-8")).decode("ascii")
+
+payload = json.dumps({
+    "message": "fix(ci): remove unsupported timezone key from schedule trigger",
+    "content": b64_content,
+    "sha": sha,
+    "branch": "main",
+})
+
+put_proc = subprocess.run(
+    [gh_path, "api", "--method", "PUT", "repos/Robbtg/ICAI-Slot-Monitor/contents/.github/workflows/main.yml", "--input", "-"],
+    input=payload,
+    capture_output=True,
+    text=True,
+)
+print("PUT returncode:", put_proc.returncode)
+print("PUT stdout:", put_proc.stdout)
+print("PUT stderr:", put_proc.stderr)
+

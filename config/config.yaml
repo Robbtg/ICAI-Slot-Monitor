@@ -18,13 +18,13 @@ watches:
   - name: "Chennai MCS"
     region: "Southern"
     pou: "CHENNAI"
-    course_exact: "MCS Course - Weekend"
+    course_exact: "Advanced (ICITSS) MCS Course"
     course_contains:
       - "MCS"
 
   - name: "Chennai Advanced ITT"
     region: "Southern"
-    pou: "CHENNAI"
+    pou: "ERNAKULAM"
     course_exact: "AICITSS - Advanced Information Technology"
     course_contains:
       - "Advanced"

@@ -9,7 +9,7 @@ on:
 
 permissions:
   contents: write
-  
+
 concurrency:
   group: icai-slot-monitor
   cancel-in-progress: false
@@ -22,8 +22,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@v5

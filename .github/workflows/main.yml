@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
 
   schedule:
-    # Approximately every 5 minutes
-    - cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
+    - cron: "*/5 * * * *"
+      timezone: "Asia/Kolkata"
 
 permissions:
   contents: write
-
+  
 concurrency:
   group: icai-slot-monitor
   cancel-in-progress: false

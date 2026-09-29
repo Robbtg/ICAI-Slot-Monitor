@@ -1,0 +1,31 @@
+portal:
+  url: "https://www.icaionlineregistration.org/launchbatchdetail.aspx"
+  timeout_ms: 30000
+  headless: true
+  retries: 2
+
+monitor:
+  minimum_available_seats: 1
+  # The monitor now sends a Telegram status report on EVERY run,
+  # regardless of whether a slot is available.
+  alert_on_new_batch: true
+  alert_on_seat_increase: true
+  alert_on_return_to_available: true
+
+# Chennai / Southern region only.
+# Course matching is case-insensitive and uses all fragments listed below.
+watches:
+  - name: "Chennai MCS"
+    region: "Southern"
+    pou: "CHENNAI"
+    course_exact: "MCS Course - Weekend"
+    course_contains:
+      - "MCS"
+
+  - name: "Chennai Advanced ITT"
+    region: "Southern"
+    pou: "CHENNAI"
+    course_exact: "AICITSS - Advanced Information Technology"
+    course_contains:
+      - "Advanced"
+      - "Information Technology"

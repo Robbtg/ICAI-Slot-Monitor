@@ -55,7 +55,7 @@ watches:
 
   - name: "Chennai Advanced ITT"
     region: "Southern"
-    pou: "ERNAKULAM"
+    pou: "CHENNAI"
     course_exact: "AICITSS - Advanced Information Technology"
     course_contains:
       - "Advanced"

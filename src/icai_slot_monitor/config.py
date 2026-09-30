@@ -21,6 +21,12 @@ class MonitorConfig:
     alert_on_new_batch: bool = True
     alert_on_seat_increase: bool = True
     alert_on_return_to_available: bool = True
+    # Long-running loop settings
+    loop_minutes: int = 350
+    interval_seconds: int = 300
+    # Telegram
+    telegram_enabled: bool = True
+    notification_mode: str = "every_check"
 
 
 @dataclass(frozen=True)
@@ -72,6 +78,10 @@ def load_config(path: str | Path) -> AppConfig:
             alert_on_new_batch=bool(m.get("alert_on_new_batch", True)),
             alert_on_seat_increase=bool(m.get("alert_on_seat_increase", True)),
             alert_on_return_to_available=bool(m.get("alert_on_return_to_available", True)),
+            loop_minutes=int(m.get("loop_minutes", 350)),
+            interval_seconds=int(m.get("interval_seconds", 300)),
+            telegram_enabled=bool(m.get("telegram_enabled", True)),
+            notification_mode=str(m.get("notification_mode", "every_check")),
         ),
         watches=tuple(watches),
     )

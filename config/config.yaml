@@ -1,3 +1,10 @@
+# ============================================================
+# ICAI Slot Monitor — Configuration
+# ============================================================
+# DO NOT store Telegram credentials here.
+# Use GitHub Secrets: ICAI_TELEGRAM_BOT_TOKEN, ICAI_TELEGRAM_CHAT_ID
+# ============================================================
+
 portal:
   url: "https://www.icaionlineregistration.org/launchbatchdetail.aspx"
   timeout_ms: 30000
@@ -5,26 +12,52 @@ portal:
   retries: 2
 
 monitor:
+  # Minimum available seats for a batch to be treated as qualifying.
   minimum_available_seats: 1
-  # The monitor now sends a Telegram status report on EVERY run,
-  # regardless of whether a slot is available.
   alert_on_new_batch: true
   alert_on_seat_increase: true
   alert_on_return_to_available: true
 
-# Chennai / Southern region only.
-# Course matching is case-insensitive and uses all fragments listed below.
+  # Long-running loop settings (used by --loop-minutes and --interval-seconds).
+  # Keep loop_minutes safely below GitHub's 360-minute job limit.
+  loop_minutes: 350
+  interval_seconds: 300
+
+  # Telegram mode. Set to false only for local testing without Telegram.
+  telegram_enabled: true
+
+  # notification_mode controls when Telegram is sent.
+  # "every_check" = send on every successful check (required behavior).
+  # "on_change"   = only when state changes (legacy, not recommended).
+  notification_mode: "every_check"
+
+# ============================================================
+# MONITORED TARGETS
+# ============================================================
+# Only two courses are monitored:
+#   1. Advanced (ICITSS) MCS Course        (Chennai Advanced MCS)
+#   2. AICITSS - Advanced Information Technology  (Chennai Advanced ITT)
+#
+# NOT monitored:
+#   - Advanced (ICITSS) MCS Course - Weekend
+#   - ICITSS - Information Technology
+#   - ICITSS - Orientation Course
+# ============================================================
+
 watches:
-  - name: "Chennai MCS"
+  - name: "Chennai Advanced MCS"
     region: "Southern"
     pou: "CHENNAI"
+    # course_exact enforces an exact text match — prevents accidental
+    # selection of the "Weekend" variant.
     course_exact: "Advanced (ICITSS) MCS Course"
     course_contains:
+      - "Advanced"
       - "MCS"
 
   - name: "Chennai Advanced ITT"
     region: "Southern"
-    pou: "ERNAKULAM"
+    pou: "CHENNAI"
     course_exact: "AICITSS - Advanced Information Technology"
     course_contains:
       - "Advanced"

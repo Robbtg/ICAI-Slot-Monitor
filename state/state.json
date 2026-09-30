@@ -1,21 +1,4 @@
 {
-  "_signature": "edc14f263c20f9ce4e2c748a7bef27fac6e51e273baaedecd1612ec681770863",
-  "batches": [
-    {
-      "available_seats": 29,
-      "course": "AICITSS - Advanced Information Technology",
-      "key": "Chennai Advanced ITT|AICITSS - Advanced Information Technology|AICITSSAdvITT__ERNAKULAM_43|04/11/2026|24/11/2026|12-30-PM to 6-30-PM|ERNAKULAM|AICITSS - Advanced Information Technology|General|22/09/2026",
-      "values": [
-        "AICITSSAdvITT__ERNAKULAM_43",
-        "29",
-        "04/11/2026",
-        "24/11/2026",
-        "12-30-PM to 6-30-PM",
-        "ERNAKULAM",
-        "AICITSS - Advanced Information Technology",
-        "General",
-        "22/09/2026"
-      ]
-    }
-  ]
+  "batches": [],
+  "_signature": "initial"
 }

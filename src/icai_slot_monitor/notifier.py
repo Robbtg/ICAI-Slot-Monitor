@@ -22,11 +22,11 @@ def _credentials() -> tuple[str, str]:
 
 
 def send_telegram(message: str) -> None:
+    """Send a Telegram message. Raises on failure — caller must handle."""
     token, chat_id = _credentials()
     url = f"https://api.telegram.org/bot{token}/sendMessage"
 
-    # Telegram has a message-length limit. The monitor normally sends a
-    # compact report, but splitting keeps a long portal response safe.
+    # Split into chunks to respect Telegram's message length limit.
     chunks = [
         message[i : i + TELEGRAM_MAX_MESSAGE_LENGTH]
         for i in range(0, len(message), TELEGRAM_MAX_MESSAGE_LENGTH)
@@ -53,7 +53,7 @@ def _batch_details(batch: Batch) -> list[str]:
     seats = (
         str(batch.available_seats)
         if batch.available_seats is not None
-        else "Not exposed by portal"
+        else "Unknown (not exposed by portal)"
     )
     details.append(f"• <b>Available seats:</b> {escape(seats)}")
 
@@ -70,25 +70,31 @@ def format_run_report(
     portal_url: str,
     *,
     started_at: str,
+    cycle: int = 0,
     error: str | None = None,
     errors_by_watch: dict[str, str] | None = None,
 ) -> str:
-    """Build the Telegram message sent on every monitor run."""
+    """Build the Telegram message sent on every monitor check."""
+    cycle_str = f" #{cycle}" if cycle else ""
     lines = [
         "🤖 <b>ICAI SLOT MONITOR</b>",
         "",
-        f"<b>Checked:</b> {escape(started_at)}",
-        "<b>Frequency:</b> ~5 minutes",
+        f"<b>Check{cycle_str}:</b> {escape(started_at)}",
+        "<b>Next check:</b> ~5 minutes",
         "",
     ]
 
+    # ---- Global failure (ICAI scrape itself threw) ----
     if error:
         lines.extend(
             [
-                "❌ <b>CHECK FAILED</b>",
+                "⚠️ <b>ICAI CHECK FAILED</b>",
+                "",
+                f"<b>Time:</b> {escape(started_at)}",
                 f"<b>Error:</b> {escape(error)}",
                 "",
                 "No availability result could be confirmed for this run.",
+                "The monitoring loop will continue with the next check.",
                 "",
                 f'🔗 <a href="{escape(portal_url)}">Open ICAI Batch Details</a>',
             ]
@@ -97,8 +103,9 @@ def format_run_report(
 
     errors_by_watch = errors_by_watch or {}
 
+    # ---- Per-watch results ----
     for watch_name in watch_names:
-        lines.append(f"📌 <b>{escape(watch_name)}</b>")
+        lines.append(f"📍 <b>CHENNAI — {escape(watch_name.replace('Chennai ', ''))}</b>")
 
         if watch_name in errors_by_watch:
             lines.append("⚠️ <b>CHECK ERROR</b>")
@@ -113,16 +120,15 @@ def format_run_report(
             lines.append("")
             continue
 
-        # A qualifying watch may return multiple rows/batches.
         available_count = 0
         for batch in batches:
             if batch.available_seats is None:
-                status = "⚠️ Batch found; seat count not exposed"
+                status = "⚠️ Batch found — seat count not exposed by portal"
             elif batch.available_seats > 0:
                 available_count += 1
-                status = f"✅ <b>{batch.available_seats} seat(s) available</b>"
+                status = f"✅ <b>Batch detected — {batch.available_seats} seat(s) available</b>"
             else:
-                status = "⛔ Batch found; 0 seats available"
+                status = "⛔ Batch found — 0 seats available"
 
             lines.append(status)
             lines.extend(_batch_details(batch))
@@ -134,21 +140,21 @@ def format_run_report(
 
     lines.extend(
         [
-            f'🔗 <a href="{escape(portal_url)}">Open ICAI Batch Details</a>',
+            "Status: ✅ Check completed successfully",
             "",
-            "This report is sent on every scheduled check.",
+            f'🔗 <a href="{escape(portal_url)}">Open ICAI Batch Details</a>',
         ]
     )
     return "\n".join(lines)
 
 
 def format_alert(batch: Batch, reason: str, portal_url: str) -> str:
-    """Backward-compatible event alert formatter."""
+    """Backward-compatible event alert formatter (kept for reference)."""
     values = "\n".join(f"• {escape(v)}" for v in batch.values if str(v).strip())
     seats = (
         str(batch.available_seats)
         if batch.available_seats is not None
-        else "Not exposed by portal"
+        else "Unknown (not exposed by portal)"
     )
 
     return (

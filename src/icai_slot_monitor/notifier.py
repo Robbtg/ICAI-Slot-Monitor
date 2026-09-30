@@ -26,7 +26,6 @@ def send_telegram(message: str) -> None:
     token, chat_id = _credentials()
     url = f"https://api.telegram.org/bot{token}/sendMessage"
 
-    # Split into chunks to respect Telegram's message length limit.
     chunks = [
         message[i : i + TELEGRAM_MAX_MESSAGE_LENGTH]
         for i in range(0, len(message), TELEGRAM_MAX_MESSAGE_LENGTH)
@@ -46,117 +45,193 @@ def send_telegram(message: str) -> None:
         response.raise_for_status()
 
 
-def _batch_details(batch: Batch) -> list[str]:
-    values = [str(v).strip() for v in batch.values if str(v).strip()]
-    details = [f"• <b>Course:</b> {escape(batch.course)}"]
+def _batch_lines(batch: Batch) -> list[str]:
+    """Format a single batch's details as a list of HTML lines."""
+    lines = []
+    seats = (
+        str(batch.available_seats)
+        if batch.available_seats is not None
+        else "Unknown"
+    )
+    lines.append(f"• <b>Course:</b> {escape(batch.course)}")
+    lines.append(f"• <b>Available seats:</b> {escape(seats)}")
 
+    values = [str(v).strip() for v in batch.values if str(v).strip()]
+    if values:
+        lines.append("• <b>Batch details:</b>")
+        lines.extend(f"  - {escape(v)}" for v in values)
+
+    return lines
+
+
+# ------------------------------------------------------------------ #
+# Message formatters                                                   #
+# ------------------------------------------------------------------ #
+
+def format_batch_alert(
+    batch: Batch,
+    checked_at: str,
+    cycle: int,
+    portal_url: str,
+) -> str:
+    """
+    Urgent alert sent immediately when a batch with available seats is found.
+    Sent on EVERY cycle where a batch is found.
+    """
     seats = (
         str(batch.available_seats)
         if batch.available_seats is not None
         else "Unknown (not exposed by portal)"
     )
-    details.append(f"• <b>Available seats:</b> {escape(seats)}")
 
-    if values:
-        details.append("• <b>Batch details:</b>")
-        details.extend(f"  - {escape(v)}" for v in values)
+    lines = [
+        "🚨 <b>ICAI BATCH AVAILABLE!</b>",
+        "",
+        f"<b>Watch:</b> {escape(batch.watch_name)}",
+        f"<b>Checked:</b> {escape(checked_at)} (cycle #{cycle})",
+        "",
+        f"✅ <b>Available seats: {escape(seats)}</b>",
+    ]
+    lines.extend(_batch_lines(batch))
+    lines.extend([
+        "",
+        f'🔗 <a href="{escape(portal_url)}">👉 Register NOW on ICAI portal</a>',
+    ])
+    return "\n".join(lines)
 
-    return details
 
+def format_summary_report(
+    results: list,  # list[CheckResult] — imported lazily to avoid circular
+    watch_names: list[str],
+    portal_url: str,
+) -> str:
+    """
+    Periodic summary sent after every N silent (no-batch) checks.
+    Compact — one line per watch per check.
+    """
+    n = len(results)
+    first_at = results[0].checked_at if results else "?"
+    last_at = results[-1].checked_at if results else "?"
+
+    lines = [
+        f"📋 <b>ICAI MONITOR — {n}-Check Summary</b>",
+        "",
+        f"<b>Period:</b> {escape(first_at)} → {escape(last_at)}",
+        f"<b>Checks:</b> #{results[0].cycle} – #{results[-1].cycle}" if results else "",
+        "",
+    ]
+
+    # Per-watch mini table
+    for watch_name in watch_names:
+        found_count = 0
+        alert_count = 0
+        for r in results:
+            batches = r.batches_by_watch.get(watch_name, [])
+            if batches:
+                found_count += 1
+                for b in batches:
+                    if b.available_seats is None or b.available_seats > 0:
+                        alert_count += 1
+
+        short_name = watch_name.replace("Chennai ", "")
+        if alert_count > 0:
+            lines.append(
+                f"📍 <b>CHENNAI — {escape(short_name)}</b>: "
+                f"🚨 SEATS AVAILABLE in {alert_count}/{n} checks!"
+            )
+        elif found_count > 0:
+            lines.append(
+                f"📍 <b>CHENNAI — {escape(short_name)}</b>: "
+                f"⛔ Batch found but 0 seats in {found_count}/{n} checks"
+            )
+        else:
+            lines.append(
+                f"📍 <b>CHENNAI — {escape(short_name)}</b>: "
+                f"❌ No batch in all {n} checks"
+            )
+
+    lines.extend([
+        "",
+        f"<i>Next summary after {n} more checks (~{n * 5} min)</i>",
+        "",
+        f'🔗 <a href="{escape(portal_url)}">ICAI Batch Details</a>',
+    ])
+    return "\n".join(lines)
+
+
+def format_error_report(
+    error: str,
+    checked_at: str,
+    cycle: int,
+    portal_url: str,
+) -> str:
+    """Alert sent immediately when the ICAI scrape itself fails."""
+    lines = [
+        "⚠️ <b>ICAI CHECK FAILED</b>",
+        "",
+        f"<b>Time:</b> {escape(checked_at)} (cycle #{cycle})",
+        f"<b>Error:</b> {escape(error)}",
+        "",
+        "No availability result for this check.",
+        "The monitoring loop will continue.",
+        "",
+        f'🔗 <a href="{escape(portal_url)}">ICAI Batch Details</a>',
+    ]
+    return "\n".join(lines)
+
+
+# ------------------------------------------------------------------ #
+# Legacy — kept for backwards compatibility only                       #
+# ------------------------------------------------------------------ #
 
 def format_run_report(
-    batches_by_watch: dict[str, list[Batch]],
+    batches_by_watch: dict,
     watch_names: list[str],
     portal_url: str,
     *,
     started_at: str,
     cycle: int = 0,
     error: str | None = None,
-    errors_by_watch: dict[str, str] | None = None,
+    errors_by_watch: dict | None = None,
 ) -> str:
-    """Build the Telegram message sent on every monitor check."""
-    cycle_str = f" #{cycle}" if cycle else ""
+    """Legacy full-report formatter. Not used in v1.3+ flow."""
+    if error:
+        return format_error_report(
+            error=error,
+            checked_at=started_at,
+            cycle=cycle,
+            portal_url=portal_url,
+        )
+    # Build a minimal summary for backwards compat
     lines = [
         "🤖 <b>ICAI SLOT MONITOR</b>",
         "",
-        f"<b>Check{cycle_str}:</b> {escape(started_at)}",
-        "<b>Next check:</b> ~5 minutes",
+        f"<b>Check #{cycle}:</b> {escape(started_at)}",
         "",
     ]
-
-    # ---- Global failure (ICAI scrape itself threw) ----
-    if error:
-        lines.extend(
-            [
-                "⚠️ <b>ICAI CHECK FAILED</b>",
-                "",
-                f"<b>Time:</b> {escape(started_at)}",
-                f"<b>Error:</b> {escape(error)}",
-                "",
-                "No availability result could be confirmed for this run.",
-                "The monitoring loop will continue with the next check.",
-                "",
-                f'🔗 <a href="{escape(portal_url)}">Open ICAI Batch Details</a>',
-            ]
-        )
-        return "\n".join(lines)
-
     errors_by_watch = errors_by_watch or {}
-
-    # ---- Per-watch results ----
     for watch_name in watch_names:
-        lines.append(f"📍 <b>CHENNAI — {escape(watch_name.replace('Chennai ', ''))}</b>")
-
+        short = watch_name.replace("Chennai ", "")
         if watch_name in errors_by_watch:
-            lines.append("⚠️ <b>CHECK ERROR</b>")
-            lines.append(f"<b>Error:</b> {escape(errors_by_watch[watch_name])}")
-            lines.append("")
-            continue
-
-        batches = batches_by_watch.get(watch_name, [])
-
-        if not batches:
-            lines.append("❌ No qualifying batch found / no slot currently detected.")
-            lines.append("")
-            continue
-
-        available_count = 0
-        for batch in batches:
-            if batch.available_seats is None:
-                status = "⚠️ Batch found — seat count not exposed by portal"
-            elif batch.available_seats > 0:
-                available_count += 1
-                status = f"✅ <b>Batch detected — {batch.available_seats} seat(s) available</b>"
+            lines.append(f"📍 <b>CHENNAI — {escape(short)}:</b> ⚠️ check error")
+        else:
+            batches = batches_by_watch.get(watch_name, [])
+            if batches:
+                lines.append(f"📍 <b>CHENNAI — {escape(short)}:</b> ✅ {len(batches)} batch(es) found")
             else:
-                status = "⛔ Batch found — 0 seats available"
-
-            lines.append(status)
-            lines.extend(_batch_details(batch))
-            lines.append("")
-
-        lines.append(f"<b>Qualifying batches:</b> {len(batches)}")
-        lines.append(f"<b>Batches with seats:</b> {available_count}")
-        lines.append("")
-
-    lines.extend(
-        [
-            "Status: ✅ Check completed successfully",
-            "",
-            f'🔗 <a href="{escape(portal_url)}">Open ICAI Batch Details</a>',
-        ]
-    )
+                lines.append(f"📍 <b>CHENNAI — {escape(short)}:</b> ❌ No batch")
+    lines.extend(["", f'🔗 <a href="{escape(portal_url)}">ICAI Batch Details</a>'])
     return "\n".join(lines)
 
 
 def format_alert(batch: Batch, reason: str, portal_url: str) -> str:
-    """Backward-compatible event alert formatter (kept for reference)."""
+    """Legacy event alert formatter (kept for reference)."""
     values = "\n".join(f"• {escape(v)}" for v in batch.values if str(v).strip())
     seats = (
         str(batch.available_seats)
         if batch.available_seats is not None
-        else "Unknown (not exposed by portal)"
+        else "Unknown"
     )
-
     return (
         "🚨 <b>ICAI BATCH OPENING</b>\n\n"
         f"<b>Watch:</b> {escape(batch.watch_name)}\n"

@@ -26,7 +26,8 @@ class MonitorConfig:
     interval_seconds: int = 300
     # Telegram
     telegram_enabled: bool = True
-    notification_mode: str = "every_check"
+    # Send a summary every N silent (no-batch) checks
+    summary_every_n_checks: int = 6
 
 
 @dataclass(frozen=True)
@@ -81,7 +82,7 @@ def load_config(path: str | Path) -> AppConfig:
             loop_minutes=int(m.get("loop_minutes", 350)),
             interval_seconds=int(m.get("interval_seconds", 300)),
             telegram_enabled=bool(m.get("telegram_enabled", True)),
-            notification_mode=str(m.get("notification_mode", "every_check")),
+            summary_every_n_checks=int(m.get("summary_every_n_checks", 6)),
         ),
         watches=tuple(watches),
     )

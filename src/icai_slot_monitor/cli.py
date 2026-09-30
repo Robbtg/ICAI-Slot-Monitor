@@ -9,7 +9,12 @@ from pathlib import Path
 from .config import load_config
 from .icai import ICAIClient
 from .models import Batch
-from .notifier import format_run_report, send_telegram
+from .notifier import (
+    format_batch_alert,
+    format_summary_report,
+    format_error_report,
+    send_telegram,
+)
 from .state import load_state, save_state, signature, snapshot
 
 
@@ -48,31 +53,62 @@ def _print_separator() -> None:
 
 
 # ------------------------------------------------------------------ #
+# Check result data class                                              #
+# ------------------------------------------------------------------ #
+
+class CheckResult:
+    """Holds the outcome of a single ICAI check cycle."""
+
+    def __init__(
+        self,
+        cycle: int,
+        checked_at: str,
+        batches_by_watch: dict[str, list[Batch]],
+        errors_by_watch: dict[str, str],
+        scrape_failed: bool = False,
+        error: str | None = None,
+    ):
+        self.cycle = cycle
+        self.checked_at = checked_at
+        self.batches_by_watch = batches_by_watch
+        self.errors_by_watch = errors_by_watch
+        self.scrape_failed = scrape_failed
+        self.error = error
+
+    @property
+    def has_available_batch(self) -> bool:
+        """True if at least one watch found a batch with seats > 0."""
+        for batches in self.batches_by_watch.values():
+            for b in batches:
+                if b.available_seats is None or b.available_seats > 0:
+                    return True
+        return False
+
+    @property
+    def has_watch_error(self) -> bool:
+        return bool(self.errors_by_watch)
+
+
+# ------------------------------------------------------------------ #
 # Single check cycle                                                   #
 # ------------------------------------------------------------------ #
 
 def run_one_check(
     cfg,
-    state_path: str,
-    previous_state: dict,
     cycle: int,
-    dry_run: bool,
-) -> dict:
+) -> CheckResult:
     """
-    Perform one full ICAI check for all watches, send Telegram, return updated state.
-
-    The function never raises — all errors are caught and reported.
-    Returns the current previous_state (unchanged) on error.
+    Perform one full ICAI check for all watches.
+    Never raises — all errors are caught and returned in CheckResult.
     """
     watch_names = [w.name for w in cfg.watches]
-    started_at_dt = _now_ist()
-    started_at = _fmt_ist(started_at_dt)
+    checked_at = _fmt_ist(_now_ist())
 
     _print_separator()
     log.info("ICAI SLOT MONITOR")
     _print_separator()
     log.info("Cycle      : %d", cycle)
-    log.info("Started    : %s", started_at)
+    log.info("Started    : %s", checked_at)
     log.info("Targets    : %d", len(cfg.watches))
 
     # ---- Attempt scrape ----
@@ -81,84 +117,119 @@ def run_one_check(
     except Exception as exc:
         error_text = f"{type(exc).__name__}: {exc}"
         log.exception("[ERROR] ICAI check failed — cycle %d", cycle)
-
-        # Try to send a Telegram error report
-        try:
-            report = format_run_report(
-                batches_by_watch={},
-                watch_names=watch_names,
-                portal_url=cfg.portal.url,
-                started_at=started_at,
-                cycle=cycle,
-                error=error_text,
-            )
-            if not dry_run and cfg.monitor.telegram_enabled:
-                send_telegram(report)
-                log.info("Telegram failure report sent.")
-            else:
-                log.info("Dry-run / Telegram disabled — failure report:\n%s", report)
-        except Exception as tg_exc:
-            log.error("Telegram error report failed: %s", tg_exc)
-
-        # Return existing state; the loop continues
-        return previous_state
+        return CheckResult(
+            cycle=cycle,
+            checked_at=checked_at,
+            batches_by_watch={},
+            errors_by_watch={},
+            scrape_failed=True,
+            error=error_text,
+        )
 
     # ---- Log results per watch ----
     for i, watch in enumerate(cfg.watches, 1):
         if watch.name in watch_errors:
             log.error("[%d/%d] %s", i, len(cfg.watches), watch.name)
-            log.error("  Region   : %s", watch.region)
-            log.error("  POU      : %s", watch.pou)
-            log.error("  Course   : %s", watch.course_exact or str(watch.course_contains))
             log.error("  [ERROR]  : %s", watch_errors[watch.name])
         else:
             watch_batches = [b for b in batches if b.watch_name == watch.name]
             result_str = f"{len(watch_batches)} batch(es) found" if watch_batches else "NO BATCH"
-            log.info("[%d/%d] %s", i, len(cfg.watches), watch.name)
-            log.info("  Region   : %s", watch.region)
-            log.info("  POU      : %s", watch.pou)
-            log.info("  Course   : %s", watch.course_exact or str(watch.course_contains))
-            log.info("  Result   : %s", result_str)
+            log.info("[%d/%d] %s → %s", i, len(cfg.watches), watch.name, result_str)
             for batch in watch_batches:
                 seats = "unknown" if batch.available_seats is None else str(batch.available_seats)
                 log.info("    Seats: %s | %s", seats, " | ".join(batch.values))
 
-    # ---- Format and send Telegram ----
-    grouped = _group_by_watch(batches)
-    report = format_run_report(
-        batches_by_watch=grouped,
-        watch_names=watch_names,
-        portal_url=cfg.portal.url,
-        started_at=started_at,
+    return CheckResult(
         cycle=cycle,
+        checked_at=checked_at,
+        batches_by_watch=_group_by_watch(batches),
         errors_by_watch=watch_errors,
     )
 
-    telegram_status = "SKIPPED (dry-run or disabled)"
-    if not dry_run and cfg.monitor.telegram_enabled:
-        try:
-            send_telegram(report)
-            telegram_status = "SENT"
-        except Exception as tg_exc:
-            telegram_status = f"FAILED — {tg_exc}"
-            log.error("Telegram send failed: %s", tg_exc)
+
+# ------------------------------------------------------------------ #
+# Notification decision engine                                         #
+# ------------------------------------------------------------------ #
+
+def maybe_notify(
+    result: CheckResult,
+    silent_results: list[CheckResult],
+    summary_every_n: int,
+    cfg,
+    dry_run: bool,
+    watch_names: list[str],
+) -> list[CheckResult]:
+    """
+    Decide what (if anything) to send to Telegram.
+
+    Rules:
+      1. Scrape error → send error alert immediately, reset silent counter.
+      2. Batch with seats available → send urgent alert immediately.
+         (silent_results counter keeps running — no reset on alerts).
+      3. No batch / 0 seats → accumulate silently.
+         When silent_results reaches summary_every_n, send summary + reset.
+
+    Returns the updated silent_results list.
+    """
+
+    def _send(message: str, label: str) -> None:
+        if dry_run or not cfg.monitor.telegram_enabled:
+            log.info("Dry-run / Telegram disabled — %s:\n%s", label, message)
+        else:
+            try:
+                send_telegram(message)
+                log.info("Telegram SENT (%s)", label)
+            except Exception as tg_exc:
+                log.error("Telegram send failed (%s): %s", label, tg_exc)
+
+    # Rule 1: Scrape error → immediate alert
+    if result.scrape_failed:
+        msg = format_error_report(
+            error=result.error or "Unknown error",
+            checked_at=result.checked_at,
+            cycle=result.cycle,
+            portal_url=cfg.portal.url,
+        )
+        _send(msg, "scrape-error")
+        # Reset silent accumulator on error so the next summary is fresh
+        return []
+
+    # Rule 2: Batch with seats → send immediate alert
+    if result.has_available_batch:
+        for watch_name in watch_names:
+            batches = result.batches_by_watch.get(watch_name, [])
+            for batch in batches:
+                if batch.available_seats is None or batch.available_seats > 0:
+                    msg = format_batch_alert(
+                        batch=batch,
+                        checked_at=result.checked_at,
+                        cycle=result.cycle,
+                        portal_url=cfg.portal.url,
+                    )
+                    _send(msg, f"BATCH ALERT — {watch_name}")
+
+        # Add this result to silent list but DON'T reset — still count toward summary
+        silent_results.append(result)
     else:
-        log.info("Dry-run / Telegram disabled — report:\n%s", report)
+        # Rule 3: Nothing found — accumulate
+        silent_results.append(result)
+        log.info(
+            "No batch found — silent check %d/%d",
+            len(silent_results),
+            summary_every_n,
+        )
 
-    log.info("Telegram   : %s", telegram_status)
+    # Send summary every N accumulated results
+    if len(silent_results) >= summary_every_n:
+        msg = format_summary_report(
+            results=silent_results,
+            watch_names=watch_names,
+            portal_url=cfg.portal.url,
+        )
+        _send(msg, f"summary ({len(silent_results)} checks)")
+        return []  # Reset accumulator
 
-    # ---- Update in-memory state ----
-    current_snap = snapshot(batches)
-    current_sig = signature(current_snap)
-    previous_sig = previous_state.get("_signature")
-
-    if current_sig != previous_sig:
-        current_snap["_signature"] = current_sig
-        log.info("State      : CHANGED (will persist at session end)")
-        return current_snap
-    else:
-        log.info("State      : unchanged")
-        return previous_state
+    return silent_results
 
 
 # ------------------------------------------------------------------ #
@@ -208,7 +279,9 @@ def main() -> int:
     # CLI overrides take precedence over config file
     loop_minutes = args.loop_minutes if args.loop_minutes is not None else cfg.monitor.loop_minutes
     interval_seconds = args.interval_seconds if args.interval_seconds is not None else cfg.monitor.interval_seconds
+    summary_every_n = cfg.monitor.summary_every_n_checks
 
+    watch_names = [w.name for w in cfg.watches]
     previous_state = load_state(args.state)
 
     log.info("=" * 50)
@@ -217,28 +290,72 @@ def main() -> int:
     log.info("Config     : %s", args.config)
     log.info("State      : %s", args.state)
     log.info("Watches    : %d", len(cfg.watches))
-    log.info("Mode       : %s", "once" if args.once else f"loop ({loop_minutes} min, {interval_seconds}s interval)")
-    log.info("Telegram   : %s", "disabled (dry-run)" if args.dry_run else ("enabled" if cfg.monitor.telegram_enabled else "disabled (config)"))
+    log.info(
+        "Mode       : %s",
+        "once" if args.once else f"loop ({loop_minutes} min, {interval_seconds}s interval)",
+    )
+    log.info(
+        "Notify     : batch alerts immediately | summary every %d checks",
+        summary_every_n,
+    )
+    log.info(
+        "Telegram   : %s",
+        "disabled (dry-run)" if args.dry_run else ("enabled" if cfg.monitor.telegram_enabled else "disabled (config)"),
+    )
 
     session_start = time.monotonic()
     session_limit_seconds = loop_minutes * 60
 
     cycle = 0
+    # Accumulator for silent (no-batch) checks
+    silent_results: list[CheckResult] = []
 
     while True:
         cycle += 1
         cycle_start = time.monotonic()
 
-        previous_state = run_one_check(
+        result = run_one_check(cfg=cfg, cycle=cycle)
+
+        # Update in-memory state
+        if not result.scrape_failed:
+            all_batches = [b for bl in result.batches_by_watch.values() for b in bl]
+            current_snap = snapshot(all_batches)
+            current_sig = signature(current_snap)
+            if current_sig != previous_state.get("_signature"):
+                current_snap["_signature"] = current_sig
+                previous_state = current_snap
+                log.info("State      : CHANGED")
+            else:
+                log.info("State      : unchanged")
+
+        # Notification decision
+        silent_results = maybe_notify(
+            result=result,
+            silent_results=silent_results,
+            summary_every_n=summary_every_n,
             cfg=cfg,
-            state_path=args.state,
-            previous_state=previous_state,
-            cycle=cycle,
             dry_run=args.dry_run,
+            watch_names=watch_names,
         )
 
         # --once exits after first check
         if args.once:
+            # Flush any pending silent results as a summary before exiting
+            if silent_results and not result.scrape_failed:
+                from .notifier import format_summary_report
+                msg = format_summary_report(
+                    results=silent_results,
+                    watch_names=watch_names,
+                    portal_url=cfg.portal.url,
+                )
+                if not args.dry_run and cfg.monitor.telegram_enabled:
+                    try:
+                        send_telegram(msg)
+                        log.info("Telegram SENT (final summary on --once exit)")
+                    except Exception as tg_exc:
+                        log.error("Telegram final summary failed: %s", tg_exc)
+                else:
+                    log.info("Dry-run: final summary:\n%s", msg)
             log.info("--once mode: exiting after cycle %d.", cycle)
             break
 
@@ -249,11 +366,9 @@ def main() -> int:
             log.info("Session duration reached (%d min). Exiting cleanly.", loop_minutes)
             break
 
-        # Calculate how long the check itself took
+        # Calculate sleep time
         cycle_elapsed = time.monotonic() - cycle_start
         sleep_time = max(0.0, interval_seconds - cycle_elapsed)
-
-        # Don't sleep longer than remaining session time
         sleep_time = min(sleep_time, remaining_session)
 
         next_check_dt = _now_ist() + timedelta(seconds=sleep_time)

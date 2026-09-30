@@ -23,13 +23,11 @@ monitor:
   loop_minutes: 350
   interval_seconds: 300
 
-  # Telegram mode. Set to false only for local testing without Telegram.
+  # Telegram mode.
+  # summary_every_n_checks: Send a compact summary after this many silent
+  # (no-batch) checks. Batch-found alerts are always sent immediately.
   telegram_enabled: true
-
-  # notification_mode controls when Telegram is sent.
-  # "every_check" = send on every successful check (required behavior).
-  # "on_change"   = only when state changes (legacy, not recommended).
-  notification_mode: "every_check"
+  summary_every_n_checks: 6
 
 # ============================================================
 # MONITORED TARGETS

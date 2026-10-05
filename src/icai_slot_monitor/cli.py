@@ -13,6 +13,7 @@ from .notifier import (
     format_batch_alert,
     format_summary_report,
     format_error_report,
+    format_final_status_report,
     send_telegram,
 )
 from .state import load_state, save_state, signature, snapshot
@@ -158,16 +159,21 @@ def maybe_notify(
     cfg,
     dry_run: bool,
     watch_names: list[str],
+    interval_seconds: int = 60,
+    is_last_search: bool = False,
+    force_summary: bool = False,
+    total_cycles: int = 1,
+    loop_minutes: int = 350,
+    is_once: bool = False,
 ) -> list[CheckResult]:
     """
     Decide what (if anything) to send to Telegram.
 
     Rules:
-      1. Scrape error → send error alert immediately, reset silent counter.
-      2. Batch with seats available → send urgent alert immediately.
-         (silent_results counter keeps running — no reset on alerts).
-      3. No batch / 0 seats → accumulate silently.
-         When silent_results reaches summary_every_n, send summary + reset.
+      1. On the last search of the run time → inform user of final status.
+      2. Scrape error → send error alert immediately.
+      3. Batch with seats available → send urgent alert immediately.
+      4. Accumulate checks and send summary every N checks or every 30 minutes.
 
     Returns the updated silent_results list.
     """
@@ -182,7 +188,39 @@ def maybe_notify(
             except Exception as tg_exc:
                 log.error("Telegram send failed (%s): %s", label, tg_exc)
 
-    # Rule 1: Scrape error → immediate alert
+    # If this is the last search of the run time, inform the user of the final status!
+    if is_last_search:
+        # If batch found with seats on this final check, send urgent alert first
+        if result.has_available_batch:
+            for watch_name in watch_names:
+                batches = result.batches_by_watch.get(watch_name, [])
+                for batch in batches:
+                    if batch.available_seats is None or batch.available_seats > 0:
+                        msg = format_batch_alert(
+                            batch=batch,
+                            checked_at=result.checked_at,
+                            cycle=result.cycle,
+                            portal_url=cfg.portal.url,
+                        )
+                        _send(msg, f"BATCH ALERT — {watch_name}")
+
+        recent = list(silent_results)
+        if not result.scrape_failed and result not in recent:
+            recent.append(result)
+
+        msg = format_final_status_report(
+            last_result=result,
+            recent_results=recent,
+            watch_names=watch_names,
+            portal_url=cfg.portal.url,
+            total_cycles=total_cycles,
+            loop_minutes=loop_minutes,
+            is_once=is_once,
+        )
+        _send(msg, "final-status")
+        return []
+
+    # Rule 1: Scrape error → immediate error alert
     if result.scrape_failed:
         msg = format_error_report(
             error=result.error or "Unknown error",
@@ -191,8 +229,7 @@ def maybe_notify(
             portal_url=cfg.portal.url,
         )
         _send(msg, "scrape-error")
-        # Reset silent accumulator on error so the next summary is fresh
-        return []
+        return silent_results
 
     # Rule 2: Batch with seats → send immediate alert
     if result.has_available_batch:
@@ -214,17 +251,18 @@ def maybe_notify(
         # Rule 3: Nothing found — accumulate
         silent_results.append(result)
         log.info(
-            "No batch found — silent check %d/%d",
+            "No batch found — check %d/%d toward summary",
             len(silent_results),
             summary_every_n,
         )
 
-    # Send summary every N accumulated results
-    if len(silent_results) >= summary_every_n:
+    # Send summary every N accumulated results or when periodic 30-min timer triggers
+    if len(silent_results) >= summary_every_n or (force_summary and silent_results):
         msg = format_summary_report(
             results=silent_results,
             watch_names=watch_names,
             portal_url=cfg.portal.url,
+            interval_seconds=interval_seconds,
         )
         _send(msg, f"summary ({len(silent_results)} checks)")
         return []  # Reset accumulator
@@ -279,6 +317,8 @@ def main() -> int:
     # CLI overrides take precedence over config file
     loop_minutes = args.loop_minutes if args.loop_minutes is not None else cfg.monitor.loop_minutes
     interval_seconds = args.interval_seconds if args.interval_seconds is not None else cfg.monitor.interval_seconds
+    summary_interval_min = getattr(cfg.monitor, "summary_interval_minutes", 30)
+    summary_interval_seconds = summary_interval_min * 60
     summary_every_n = cfg.monitor.summary_every_n_checks
 
     watch_names = [w.name for w in cfg.watches]
@@ -289,13 +329,14 @@ def main() -> int:
     log.info("=" * 50)
     log.info("Config     : %s", args.config)
     log.info("State      : %s", args.state)
-    log.info("Watches    : %d", len(cfg.watches))
+    log.info("Watches    : %d (%s)", len(cfg.watches), ", ".join(watch_names))
     log.info(
         "Mode       : %s",
         "once" if args.once else f"loop ({loop_minutes} min, {interval_seconds}s interval)",
     )
     log.info(
-        "Notify     : batch alerts immediately | summary every %d checks",
+        "Notify     : batch alerts immediately | summary every %d min (%d checks) | final status on last search",
+        summary_interval_min,
         summary_every_n,
     )
     log.info(
@@ -305,6 +346,7 @@ def main() -> int:
 
     session_start = time.monotonic()
     session_limit_seconds = loop_minutes * 60
+    last_summary_time = session_start
 
     cycle = 0
     # Accumulator for silent (no-batch) checks
@@ -328,6 +370,21 @@ def main() -> int:
             else:
                 log.info("State      : unchanged")
 
+        # Determine timing and whether this is the last search of the session
+        elapsed_session = time.monotonic() - session_start
+        cycle_elapsed = time.monotonic() - cycle_start
+        remaining_session = session_limit_seconds - elapsed_session
+        sleep_time = max(0.0, interval_seconds - cycle_elapsed)
+
+        is_last_search = (
+            args.once
+            or (remaining_session <= 0)
+            or (remaining_session - sleep_time <= 0)
+        )
+
+        time_since_summary = time.monotonic() - last_summary_time
+        force_summary = time_since_summary >= summary_interval_seconds
+
         # Notification decision
         silent_results = maybe_notify(
             result=result,
@@ -336,41 +393,29 @@ def main() -> int:
             cfg=cfg,
             dry_run=args.dry_run,
             watch_names=watch_names,
+            interval_seconds=interval_seconds,
+            is_last_search=is_last_search,
+            force_summary=force_summary,
+            total_cycles=cycle,
+            loop_minutes=loop_minutes,
+            is_once=args.once,
         )
 
-        # --once exits after first check
-        if args.once:
-            # Flush any pending silent results as a summary before exiting
-            if silent_results and not result.scrape_failed:
-                from .notifier import format_summary_report
-                msg = format_summary_report(
-                    results=silent_results,
-                    watch_names=watch_names,
-                    portal_url=cfg.portal.url,
+        if not silent_results or force_summary:
+            last_summary_time = time.monotonic()
+
+        if is_last_search:
+            if args.once:
+                log.info("--once mode: exiting after cycle %d.", cycle)
+            else:
+                log.info(
+                    "Last search of session completed (%d min limit, cycle %d). Exiting cleanly.",
+                    loop_minutes,
+                    cycle,
                 )
-                if not args.dry_run and cfg.monitor.telegram_enabled:
-                    try:
-                        send_telegram(msg)
-                        log.info("Telegram SENT (final summary on --once exit)")
-                    except Exception as tg_exc:
-                        log.error("Telegram final summary failed: %s", tg_exc)
-                else:
-                    log.info("Dry-run: final summary:\n%s", msg)
-            log.info("--once mode: exiting after cycle %d.", cycle)
             break
 
-        elapsed_session = time.monotonic() - session_start
-        remaining_session = session_limit_seconds - elapsed_session
-
-        if remaining_session <= 0:
-            log.info("Session duration reached (%d min). Exiting cleanly.", loop_minutes)
-            break
-
-        # Calculate sleep time
-        cycle_elapsed = time.monotonic() - cycle_start
-        sleep_time = max(0.0, interval_seconds - cycle_elapsed)
         sleep_time = min(sleep_time, remaining_session)
-
         next_check_dt = _now_ist() + timedelta(seconds=sleep_time)
         log.info(
             "Next check in: %.0f seconds (~%s IST)",

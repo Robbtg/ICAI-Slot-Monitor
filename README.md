@@ -1,6 +1,6 @@
 # ICAI Slot Monitor
 
-A free, self-hosted monitoring system that automatically checks the official **ICAI Launch Batch Details** page every ~5 minutes and sends you a Telegram notification after **every** check — whether or not a slot is available.
+A free, self-hosted monitoring system that automatically checks the official **ICAI Launch Batch Details** page every ~1 minute, updates you every 30 minutes, alerts immediately when slots are available, and sends a final status report on the last search of the run time.
 
 **Platform:** GitHub Actions + Python + Playwright + Telegram  
 **Cost:** ₹0 — no paid hosting required  
@@ -10,12 +10,12 @@ A free, self-hosted monitoring system that automatically checks the official **I
 
 ## What This Monitor Does
 
-Every ~5 minutes (continuously, 24/7), the monitor:
+Every ~1 minute (continuously, 24/7), the monitor:
 
 1. Opens the ICAI Launch Batch Details page using a real Chromium browser (Playwright)
 2. Selects **Region: Southern** → **POU: CHENNAI** → the target course
 3. Clicks **Get List** and reads the results table
-4. Sends a Telegram message with the result — **even if no batch is found**
+4. Alerts immediately if seats are open, sends summaries every 30 minutes, and reports status on the final search
 
 ---
 
@@ -24,9 +24,8 @@ Every ~5 minutes (continuously, 24/7), the monitor:
 | Name | Region | POU | Course |
 |------|--------|-----|--------|
 | Chennai Advanced MCS | Southern | CHENNAI | Advanced (ICITSS) MCS Course |
-| Chennai Advanced ITT | Southern | CHENNAI | AICITSS - Advanced Information Technology |
 
-> **Not monitored:** "Advanced (ICITSS) MCS Course - Weekend", "ICITSS - Information Technology", "ICITSS - Orientation Course"
+> **Not monitored:** "AICITSS - Advanced Information Technology (Chennai Advanced ITT)", "Advanced (ICITSS) MCS Course - Weekend", "ICITSS - Information Technology", "ICITSS - Orientation Course"
 
 ---
 
@@ -227,9 +226,10 @@ Edit [`config/config.yaml`](config/config.yaml) to adjust settings:
 ```yaml
 monitor:
   loop_minutes: 350        # Session duration (keep < 360)
-  interval_seconds: 300    # Check interval (5 minutes)
+  interval_seconds: 60     # Check interval (1 minute)
   telegram_enabled: true
-  notification_mode: "every_check"  # Send on every check, not just on change
+  summary_interval_minutes: 30
+  summary_every_n_checks: 30
   minimum_available_seats: 1
 ```
 
@@ -259,12 +259,14 @@ GitHub cron fires (4x per day)
          ↓
 checkout + install deps (~2 min)
          ↓
-python cli.py --loop-minutes 350 --interval-seconds 300
+python cli.py --loop-minutes 350 --interval-seconds 60
          ↓
-Cycle 1: check ICAI → Telegram → sleep 5 min
-Cycle 2: check ICAI → Telegram → sleep 5 min
+Cycle 1: check ICAI → wait 1 min
+Cycle 2: check ICAI → wait 1 min
          ...
-Cycle ~70: check ICAI → Telegram
+Cycle 30: 30-min summary report sent to Telegram
+         ...
+Cycle 350: Last search → final status report sent to Telegram
          ↓
 350 minutes elapsed → exit cleanly
          ↓

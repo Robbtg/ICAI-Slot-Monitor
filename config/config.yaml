@@ -21,22 +21,24 @@ monitor:
   # Long-running loop settings (used by --loop-minutes and --interval-seconds).
   # Keep loop_minutes safely below GitHub's 360-minute job limit.
   loop_minutes: 350
-  interval_seconds: 300
+  interval_seconds: 60
 
   # Telegram mode.
-  # summary_every_n_checks: Send a compact summary after this many silent
-  # (no-batch) checks. Batch-found alerts are always sent immediately.
+  # summary_interval_minutes: Periodic status update interval in minutes.
+  # summary_every_n_checks: Send a compact summary after this many checks (30 checks at 1m interval = 30m).
+  # Batch-found alerts are always sent immediately.
   telegram_enabled: true
-  summary_every_n_checks: 6
+  summary_interval_minutes: 30
+  summary_every_n_checks: 30
 
 # ============================================================
 # MONITORED TARGETS
 # ============================================================
-# Only two courses are monitored:
+# Monitored course:
 #   1. Advanced (ICITSS) MCS Course        (Chennai Advanced MCS)
-#   2. AICITSS - Advanced Information Technology  (Chennai Advanced ITT)
 #
 # NOT monitored:
+#   - AICITSS - Advanced Information Technology  (Chennai Advanced ITT)
 #   - Advanced (ICITSS) MCS Course - Weekend
 #   - ICITSS - Information Technology
 #   - ICITSS - Orientation Course
@@ -53,10 +55,3 @@ watches:
       - "Advanced"
       - "MCS"
 
-  - name: "Chennai Advanced ITT"
-    region: "Southern"
-    pou: "CHENNAI"
-    course_exact: "AICITSS - Advanced Information Technology"
-    course_contains:
-      - "Advanced"
-      - "Information Technology"

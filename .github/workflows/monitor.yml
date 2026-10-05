@@ -5,9 +5,9 @@ name: ICAI Slot Monitor
 # ============================================================
 # GitHub's cron fires at most every 5 minutes, but is unreliable under load.
 # Instead, this workflow fires every ~6 hours and the Python process runs
-# a continuous loop internally, checking every ~5 minutes for ~350 minutes.
+# a continuous loop internally, checking every ~1 minute for ~350 minutes.
 #
-# This ensures ~5-minute checks even when GitHub's scheduler is delayed.
+# This ensures ~1-minute checks even when GitHub's scheduler is delayed.
 #
 # Four daily sessions (IST):
 #   Session 1: ~00:02 IST → ~05:52 IST   (cron: 18:32 UTC prev day)
@@ -26,9 +26,9 @@ on:
         required: false
         default: "350"
       interval_seconds:
-        description: "Check interval in seconds (default: 300)"
+        description: "Check interval in seconds (default: 60)"
         required: false
-        default: "300"
+        default: "60"
 
   schedule:
     # Session 1: 00:02 IST = 18:32 UTC (previous day)
@@ -98,7 +98,7 @@ jobs:
       - name: Run ICAI monitor (long-running loop)
         run: |
           LOOP_MINUTES="${{ github.event.inputs.loop_minutes || '350' }}"
-          INTERVAL_SECONDS="${{ github.event.inputs.interval_seconds || '300' }}"
+          INTERVAL_SECONDS="${{ github.event.inputs.interval_seconds || '60' }}"
 
           echo "=================================================="
           echo "Starting ICAI monitoring session"

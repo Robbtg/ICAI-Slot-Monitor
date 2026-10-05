@@ -6,18 +6,15 @@
 2. Obtain the target chat ID.
 3. Add `ICAI_TELEGRAM_BOT_TOKEN` and `ICAI_TELEGRAM_CHAT_ID` to GitHub Actions secrets.
 4. Run the workflow manually once.
-5. Confirm the Telegram message contains both Chennai watches.
+5. Confirm the Telegram message contains Chennai Advanced MCS watch.
 
 ## Expected Telegram messages
 
-The bot sends one combined status report on every run:
+The bot monitors Chennai Advanced MCS Course:
 
-- Chennai MCS: batch/seat result
-- Chennai Advanced ITT: batch/seat result
-- check timestamp
-- official ICAI link
-
-This happens whether slots are available or not.
+- Immediate alert when batches with seats become available
+- Periodic compact summary every 30 minutes (30 checks)
+- Final status report on the last search of the run time (session completion)
 
 ## If the ICAI page changes
 

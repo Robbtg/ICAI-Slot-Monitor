@@ -23,11 +23,12 @@ class MonitorConfig:
     alert_on_return_to_available: bool = True
     # Long-running loop settings
     loop_minutes: int = 350
-    interval_seconds: int = 300
+    interval_seconds: int = 60
     # Telegram
     telegram_enabled: bool = True
-    # Send a summary every N silent (no-batch) checks
-    summary_every_n_checks: int = 6
+    # Send a summary every N checks or every X minutes
+    summary_interval_minutes: int = 30
+    summary_every_n_checks: int = 30
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,10 @@ def load_config(path: str | Path) -> AppConfig:
     if not watches:
         raise ValueError("config.yaml contains no watches")
 
+    interval_sec = int(m.get("interval_seconds", 60))
+    summary_min = int(m.get("summary_interval_minutes", 30))
+    summary_checks = int(m.get("summary_every_n_checks", max(1, (summary_min * 60) // max(1, interval_sec))))
+
     return AppConfig(
         portal=PortalConfig(
             url=str(p.get("url", "https://www.icaionlineregistration.org/launchbatchdetail.aspx")),
@@ -80,9 +85,10 @@ def load_config(path: str | Path) -> AppConfig:
             alert_on_seat_increase=bool(m.get("alert_on_seat_increase", True)),
             alert_on_return_to_available=bool(m.get("alert_on_return_to_available", True)),
             loop_minutes=int(m.get("loop_minutes", 350)),
-            interval_seconds=int(m.get("interval_seconds", 300)),
+            interval_seconds=interval_sec,
             telegram_enabled=bool(m.get("telegram_enabled", True)),
-            summary_every_n_checks=int(m.get("summary_every_n_checks", 6)),
+            summary_interval_minutes=summary_min,
+            summary_every_n_checks=summary_checks,
         ),
         watches=tuple(watches),
     )
